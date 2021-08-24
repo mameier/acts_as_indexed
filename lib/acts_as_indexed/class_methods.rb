@@ -1,7 +1,5 @@
 module ActsAsIndexed
-
   module ClassMethods
-
     # Declares a class as searchable.
     #
     # ====options:
@@ -28,31 +26,35 @@ module ActsAsIndexed
       after_destroy :remove_from_index
 
       # scope for Rails 3.x, named_scope for Rails 2.x.
-      if self.respond_to?(:where)
-        scope :with_query, lambda { |query| where("#{table_name}.#{primary_key} IN (?)", search_index(query, {}, {:ids_only => true})) }
+      if respond_to?(:where)
+        scope :with_query, lambda { |query|
+                             where("#{table_name}.#{primary_key} IN (?)", search_index(query, {}, { ids_only: true }))
+                           }
       else
-        named_scope :with_query, lambda { |query| { :conditions => ["#{table_name}.#{primary_key} IN (?)", search_index(query, {}, {:ids_only => true}) ] } }
+        named_scope :with_query, lambda { |query|
+                                   { conditions: ["#{table_name}.#{primary_key} IN (?)", search_index(query, {}, { ids_only: true })] }
+                                 }
       end
 
       cattr_accessor :aai_config, :aai_fields
 
       self.aai_fields = options.delete(:fields)
-      raise(ArgumentError, 'no fields specified') if self.aai_fields.nil? || self.aai_fields.empty?
+      raise(ArgumentError, 'no fields specified') if aai_fields.nil? || aai_fields.empty?
 
       self.aai_config = ActsAsIndexed.configuration.dup
-      self.aai_config.if_proc = options.delete(:if)
+      aai_config.if_proc = options.delete(:if)
       options.each do |k, v|
-        self.aai_config.send("#{k}=", v)
+        aai_config.send("#{k}=", v)
       end
 
       # Add the Rails environment and this model's name to the index file path.
-      self.aai_config.index_file = self.aai_config.index_file.join(Rails.env, self.name.underscore)
+      aai_config.index_file = aai_config.index_file.join(Rails.env, name.underscore)
     end
 
     # Adds the passed +record+ to the index. Index is built if it does not already exist. Clears the query cache.
 
     def index_add(record)
-      return if self.aai_config.disable_auto_indexing
+      return if aai_config.disable_auto_indexing
 
       build_index
       index = new_index
@@ -63,7 +65,7 @@ module ActsAsIndexed
     # Removes the passed +record+ from the index. Clears the query cache.
 
     def index_remove(record)
-      return if self.aai_config.disable_auto_indexing
+      return if aai_config.disable_auto_indexing
 
       index = new_index
       index.remove_record(record)
@@ -75,11 +77,11 @@ module ActsAsIndexed
     # 2. Adds the new version to the index.
 
     def index_update(record)
-      return if self.aai_config.disable_auto_indexing
+      return if aai_config.disable_auto_indexing
 
       build_index
       index = new_index
-      index.update_record(record,find(record.id))
+      index.update_record(record, find(record.id))
       @query_cache = {}
     end
 
@@ -98,10 +100,9 @@ module ActsAsIndexed
     # ids_only:: Method returns an array of integer IDs when set to true.
     # no_query_cache:: Turns off the query cache when set to true. Useful for testing.
 
-    def search_index(query, find_options={}, options={})
-
+    def search_index(query, find_options = {}, options = {})
       # Clear the query cache off  if the key is set.
-      @query_cache = {}  if options[:no_query_cache]
+      @query_cache = {} if options[:no_query_cache]
 
       # Run the query if not already in cache.
       if !@query_cache || !@query_cache[query]
@@ -110,21 +111,21 @@ module ActsAsIndexed
       end
 
       if options[:ids_only]
-        find_option_keys = find_options.keys.map{ |k| k.to_sym }
-        find_option_keys -= [:limit, :offset]
+        find_option_keys = find_options.keys.map { |k| k.to_sym }
+        find_option_keys -= %i[limit offset]
         if find_option_keys.any?
           raise ArgumentError, 'ids_only can not be combined with find option keys other than :offset or :limit'
         end
       end
 
       if find_options.include?(:order)
-        part_query = @query_cache[query].map{ |r| r.first }
+        part_query = @query_cache[query].map { |r| r.first }
 
       else
         # slice up the results by offset and limit
         offset = find_options[:offset] || 0
         limit = find_options.include?(:limit) ? find_options[:limit] : @query_cache[query].size
-        part_query = sort(@query_cache[query]).slice(offset,limit).map{ |r| r.first }
+        part_query = sort(@query_cache[query]).slice(offset, limit).map { |r| r.first }
 
         # Set these to nil as we are dealing with the pagination by setting
         # exactly what records we want.
@@ -134,25 +135,26 @@ module ActsAsIndexed
 
       return part_query if options[:ids_only]
 
-      with_scope :find => find_options do
+      offset = find_options.has_key?(:offset) ? find_options.delete(:offset) : nil
+      limit = find_options.has_key?(:limit) ? find_options.delete(:limit) : nil
+      where(find_options).offset(offset).limit(limit).scoping do
         # Doing the find like this eliminates the possibility of errors occuring
         # on either missing records (out-of-sync) or an empty results array.
-        records = find(:all, :conditions => [ "#{table_name}.#{primary_key} IN (?)", part_query])
+        records = where("#{table_name}.#{primary_key} IN (?)", part_query)
 
         if find_options.include?(:order)
-         records # Just return the records without ranking them.
+          records # Just return the records without ranking them.
 
-         else
-           # Results come back in random order from SQL, so order again.
-           ranked_records = ActiveSupport::OrderedHash.new
-           records.each do |r|
-             ranked_records[r] = @query_cache[query][r.id]
-           end
+        else
+          # Results come back in random order from SQL, so order again.
+          ranked_records = ActiveSupport::OrderedHash.new
+          records.each do |r|
+            ranked_records[r] = @query_cache[query][r.id]
+          end
 
-           sort(ranked_records.to_a).map{ |r| r.first }
-         end
+          sort(ranked_records.to_a).map { |r| r.first }
+        end
       end
-
     end
 
     # Builds an index from scratch for the current model class.
@@ -162,7 +164,7 @@ module ActsAsIndexed
       return if aai_config.index_file.directory?
 
       index = new_index
-      find_in_batches({ :batch_size => 500 }) do |records|
+      find_in_batches({ batch_size: 500 }) do |records|
         index.add_records(records)
       end
     end
@@ -172,26 +174,23 @@ module ActsAsIndexed
     # If two records or record IDs have the same rank, sort them by ID.
     # This prevents a different order being returned by different Rubies.
     def sort(ranked_records)
-      ranked_records.sort { |a, b|
+      ranked_records.sort do |a, b|
         a_score = a.last
-        a_id = a.first.is_a?(Fixnum) ? a.first : a.first.id
+        a_id = a.first.is_a?(Integer) ? a.first : a.first.id
 
         b_score = b.last
-        b_id = b.first.is_a?(Fixnum) ? b.first : b.first.id
+        b_id = b.first.is_a?(Integer) ? b.first : b.first.id
 
         if a_score == b_score
           a_id <=> b_id
         else
           b_score <=> a_score # We want the records with better relevance first.
         end
-
-      }
+      end
     end
 
     def new_index
       SearchIndex.new(aai_fields, aai_config)
     end
-
   end
-
 end
