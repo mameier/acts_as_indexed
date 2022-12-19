@@ -6,5 +6,5 @@ group :test do
   gem "sqlite3"
   gem "test-unit"
   gem "activerecord", "~> 3.2.9"
-  gem "will_paginate", "~> 3.0.3"
+  gem "will_paginate", "~> 3.0.5"
 end
